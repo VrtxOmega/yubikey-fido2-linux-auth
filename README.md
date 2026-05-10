@@ -189,8 +189,8 @@ This YubiKey setup is one layer of a broader sovereign infrastructure stack buil
               ┌────────────────┼────────────────┐
               │                │                │
     ┌─────────▼──────┐ ┌───────▼──────┐ ┌──────▼───────┐
-    │  MSI Raider    │ │  Dell Lat    │ │   Phone      │
-    │  GE78 HX       │ │  5430 Rugged │ │  Termius     │
+    │  Raider        │ │  Dell        │ │   Phone      │
+    │  (Primary)     │ │  (Secondary) │ │  Terminus    │
     │  Pop!_OS 24.04 │ │  Pop!_OS     │ │  SSH Client  │
     │  COSMIC        │ │  Staging Node│ │              │
     └─────────┬──────┘ └───────┬──────┘ └──────┬───────┘
@@ -213,7 +213,7 @@ This YubiKey setup is one layer of a broader sovereign infrastructure stack buil
 | DNS | AdGuard DNS (Raider) | Network-wide ad/telemetry blocking, centralized control |
 | Remote Access | Termius (iOS/Android) | Full terminal access to Raider and Dell from anywhere |
 | OS | Pop!_OS 24.04 COSMIC | Both laptops, clean Linux-native environment |
-| Staging | Dell Latitude 5430 Rugged | Verification node, bidirectional SSH with Raider |
+| Staging | Dell (Secondary) | Verification node, bidirectional SSH with Raider |
 
 ### Why This Matters
 
