@@ -233,11 +233,14 @@ ssh rage@raider.tail43dc9a.ts.net
 # From phone — into Dell
 ssh vrtxomega@pop-os.tail43dc9a.ts.net
 
-# Raider ↔ Dell (bidirectional)
+# Raider → Dell
 ssh vrtxomega@pop-os.tail43dc9a.ts.net
+
+# Dell → Raider
 ssh rage@raider.tail43dc9a.ts.net
 
-# DNS filtering active on all devices via AdGuard running on Raider
+# DNS filtering active on all devices
+# via AdGuard running on Raider
 ```
 
 ## License
