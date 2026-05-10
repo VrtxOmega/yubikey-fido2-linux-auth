@@ -172,6 +172,74 @@ sudo setfacl -m u:$USER:rw /dev/hidraw*
 - **Key 2**: Usually has OTP disabled; only FIDO2/WebAuthn available
 - **Solution**: Use FIDO2 for everything — consistent across both keys, no keyboard buffer injection issues
 
+## Sovereign Network Architecture
+
+This YubiKey setup is one layer of a broader sovereign infrastructure stack built on a fresh Pop!_OS 24.04 COSMIC install.
+
+### Network Topology
+
+```
+                    ┌─────────────────────┐
+                    │   AdGuard DNS        │
+                    │   (Raider Hub)       │
+                    │   DNS filtering +    │
+                    │   telemetry blocking   │
+                    └──────────┬──────────┘
+                               │
+              ┌────────────────┼────────────────┐
+              │                │                │
+    ┌─────────▼──────┐ ┌───────▼──────┐ ┌──────▼───────┐
+    │  MSI Raider    │ │  Dell Lat    │ │   Phone      │
+    │  GE78 HX       │ │  5430 Rugged │ │  Termius     │
+    │  Pop!_OS 24.04 │ │  Pop!_OS     │ │  SSH Client  │
+    │  COSMIC        │ │  Staging Node│ │              │
+    └─────────┬──────┘ └───────┬──────┘ └──────┬───────┘
+              │                │                │
+              └────────────────┼────────────────┘
+                               │
+                    ┌──────────▼──────────┐
+                    │     Tailscale        │
+                    │  Encrypted Mesh VPN  │
+                    │  All devices, always │
+                    └─────────────────────┘
+```
+
+### Stack Components
+
+| Layer | Tool | Purpose |
+|-------|------|---------|
+| Authentication | YubiKey 5C NFC FIPS | Hardware-enforced identity — `sudo` + lock screen |
+| VPN Mesh | Tailscale | Encrypted tunnels between all devices, any network |
+| DNS | AdGuard DNS (Raider) | Network-wide ad/telemetry blocking, centralized control |
+| Remote Access | Termius (iOS/Android) | Full terminal access to Raider and Dell from anywhere |
+| OS | Pop!_OS 24.04 COSMIC | Both laptops, clean Linux-native environment |
+| Staging | Dell Latitude 5430 Rugged | Verification node, bidirectional SSH with Raider |
+
+### Why This Matters
+
+Every component is chosen for sovereignty. No cloud dependency, no third-party data capture, no trust assumptions you didn't make yourself.
+
+- **Tailscale** gives every device a stable private IP that works across networks.
+- **AdGuard DNS** on the Raider filters at the network level — before any device makes an external call.
+- **YubiKey FIDO2** means the machines at the center require physical hardware presence to authenticate.
+- **Termius** means the whole stack is accessible from your pocket.
+
+### Access Patterns
+
+```bash
+# From phone — into Raider
+ssh rage@raider.tail43dc9a.ts.net
+
+# From phone — into Dell
+ssh vrtxomega@pop-os.tail43dc9a.ts.net
+
+# Raider ↔ Dell (bidirectional)
+ssh vrtxomega@pop-os.tail43dc9a.ts.net
+ssh rage@raider.tail43dc9a.ts.net
+
+# DNS filtering active on all devices via AdGuard running on Raider
+```
+
 ## License
 
 MIT
