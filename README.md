@@ -47,9 +47,9 @@ Both credentials must be on **one line per user**. This is the bug zero guides m
 mkdir -p ~/.config/Yubico
 
 # Write as ONE LINE
-# Format: username:keyhandle1,publickey1,es256,+presence:keyhandle2,publickey2,es256,+presence
+# Format: username:KeyHandle1,PublicKey1,es256,+presence:KeyHandle2,PublicKey2,es256,+presence
 cat > ~/.config/Yubico/u2f_keys << 'EOF'
-rage:<KEY1_HANDLE>,<KEY1_PUBKEY>,es256,+presence:<KEY2_HANDLE>,<KEY2_PUBKEY>,es256,+presence
+<username>:<KEY1_HANDLE>,<KEY1_PUBKEY>,es256,+presence:<KEY2_HANDLE>,<KEY2_PUBKEY>,es256,+presence
 EOF
 
 # Lock permissions — 0664 triggers warnings and can fail
@@ -58,10 +58,10 @@ chmod 600 ~/.config/Yubico/u2f_keys
 
 **Wrong** (what most guides show):
 ```
-rage:<KEY1_HANDLE>,<KEY1_PUBKEY>,es256,+presence
-rage:<KEY2_HANDLE>,<KEY2_PUBKEY>,es256,+presence
+<username>:<KEY1_HANDLE>,<KEY1_PUBKEY>,es256,+presence
+<username>:<KEY2_HANDLE>,<KEY2_PUBKEY>,es256,+presence
 ```
-`pam_u2f` reads line 1, matches user `rage`, stops. Key 2 never checked.
+`pam_u2f` reads line 1, matches user `<username>`, stops. Key 2 never checked.
 
 ### 3. Update PAM for Lock Screen
 
@@ -115,8 +115,8 @@ auth sufficient pam_yubico.so id=<YUBICO_CLIENT_ID> key=<YUBICO_API_KEY> authfil
 Create the authfile:
 ```bash
 sudo mkdir -p /etc/yubico
-echo "rage:cccccdeirbfc" | sudo tee /etc/yubico/authorized_yubikeys
-echo "rage:cccccdehervg" | sudo tee -a /etc/yubico/authorized_yubikeys
+echo "<username>:cccccdeirbfc" | sudo tee /etc/yubico/authorized_yubikeys
+echo "<username>:cccccdehervg" | sudo tee -a /etc/yubico/authorized_yubikeys
 ```
 
 ## Troubleshooting
@@ -180,25 +180,25 @@ This YubiKey setup is one layer of a broader sovereign infrastructure stack buil
 
 ```
                     ┌─────────────────────┐
-                    │   AdGuard DNS        │
-                    │   (Raider Hub)       │
-                    │   DNS filtering +    │
-                    │   telemetry blocking   │
+                    │   AdGuard DNS      │
+                    │   (Primary Hub)    │
+                    │   DNS filtering +  │
+                    │   telemetry block  │
                     └──────────┬──────────┘
                                │
               ┌────────────────┼────────────────┐
               │                │                │
     ┌─────────▼──────┐ ┌───────▼──────┐ ┌──────▼───────┐
-    │  Raider        │ │  Dell        │ │   Phone      │
-    │  (Primary)     │ │  (Secondary) │ │  Terminus    │
-    │  Pop!_OS 24.04 │ │  Pop!_OS     │ │  SSH Client  │
+    │  Primary       │ │  Secondary   │ │   Phone      │
+    │  Laptop        │ │  Laptop      │ │  SSH Client  │
+    │  Pop!_OS 24.04 │ │  Pop!_OS     │ │              │
     │  COSMIC        │ │  Staging Node│ │              │
     └─────────┬──────┘ └───────┬──────┘ └──────┬───────┘
               │                │                │
               └────────────────┼────────────────┘
                                │
                     ┌──────────▼──────────┐
-                    │     Tailscale        │
+                    │     Tailscale       │
                     │  Encrypted Mesh VPN  │
                     │  All devices, always │
                     └─────────────────────┘
@@ -210,37 +210,36 @@ This YubiKey setup is one layer of a broader sovereign infrastructure stack buil
 |-------|------|---------|
 | Authentication | YubiKey 5C NFC FIPS | Hardware-enforced identity — `sudo` + lock screen |
 | VPN Mesh | Tailscale | Encrypted tunnels between all devices, any network |
-| DNS | AdGuard DNS (Raider) | Network-wide ad/telemetry blocking, centralized control |
-| Remote Access | Termius (iOS/Android) | Full terminal access to Raider and Dell from anywhere |
+| DNS | AdGuard DNS (Primary Hub) | Network-wide ad/telemetry blocking, centralized control |
+| Remote Access | SSH Client (iOS/Android) | Full terminal access to Primary and Secondary laptops from anywhere |
 | OS | Pop!_OS 24.04 COSMIC | Both laptops, clean Linux-native environment |
-| Staging | Dell (Secondary) | Verification node, bidirectional SSH with Raider |
+| Staging | Secondary Laptop | Verification node, bidirectional SSH with Primary |
 
 ### Why This Matters
 
 Every component is chosen for sovereignty. No cloud dependency, no third-party data capture, no trust assumptions you didn't make yourself.
 
 - **Tailscale** gives every device a stable private IP that works across networks.
-- **AdGuard DNS** on the Raider filters at the network level — before any device makes an external call.
+- **AdGuard DNS** on the Primary Hub filters at the network level — before any device makes an external call.
 - **YubiKey FIDO2** means the machines at the center require physical hardware presence to authenticate.
-- **Termius** means the whole stack is accessible from your pocket.
+- **SSH Client** means the whole stack is accessible from your pocket.
 
 ### Access Patterns
 
 ```bash
-# From phone — into Raider
-ssh rage@raider.tail43dc9a.ts.net
+# From phone — into Primary Laptop
+ssh <user1>@<host1>.<tailnet>.ts.net
 
-# From phone — into Dell
-ssh vrtxomega@pop-os.tail43dc9a.ts.net
+# From phone — into Secondary Laptop
+ssh <user2>@<host2>.<tailnet>.ts.net
 
-# Raider → Dell
-ssh vrtxomega@pop-os.tail43dc9a.ts.net
+# Primary → Secondary
+ssh <user2>@<host2>.<tailnet>.ts.net
 
-# Dell → Raider
-ssh rage@raider.tail43dc9a.ts.net
+# Secondary → Primary
+ssh <user1>@<host1>.<tailnet>.ts.net
 
-# DNS filtering active on all devices
-# via AdGuard running on Raider
+# DNS filtering active on all devices via AdGuard on Primary Hub
 ```
 
 ## License
