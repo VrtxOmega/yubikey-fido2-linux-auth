@@ -115,8 +115,8 @@ auth sufficient pam_yubico.so id=<YUBICO_CLIENT_ID> key=<YUBICO_API_KEY> authfil
 Create the authfile:
 ```bash
 sudo mkdir -p /etc/yubico
-echo "<username>:cccccdeirbfc" | sudo tee /etc/yubico/authorized_yubikeys
-echo "<username>:cccccdehervg" | sudo tee -a /etc/yubico/authorized_yubikeys
+echo "<username>:003cPUBLIC_ID_1003e" | sudo tee /etc/yubico/authorized_yubikeys
+echo "<username>:003cPUBLIC_ID_2003e" | sudo tee -a /etc/yubico/authorized_yubikeys
 ```
 
 ## Troubleshooting
