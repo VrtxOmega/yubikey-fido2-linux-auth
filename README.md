@@ -1,6 +1,6 @@
 # YubiKey FIDO2 Linux Authentication
 
-Configure YubiKey 5C NFC FIPS for passwordless `sudo` and lock screen on Pop!_OS (Debian/Ubuntu-based) using `pam_u2f.so`.
+Configure FIDO2 security keys for passwordless sudo and lock screen on Pop!_OS (Debian/Ubuntu-based) using pam_u2f.so.
 
 ## What This Guide Solves
 
