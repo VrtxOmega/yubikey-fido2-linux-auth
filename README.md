@@ -1,149 +1,379 @@
-# YubiKey FIDO2 Linux Authentication
+# FIDO2 Linux Authentication — Complete Hardening Guide
 
-Configure FIDO2 security keys for passwordless sudo and lock screen on Pop!_OS (Debian/Ubuntu-based) using pam_u2f.so.
+Full FIDO2-only authentication on Pop!_OS 24.04 COSMIC (Debian/Ubuntu-based). No password fallback on any privilege path.
+
+Most guides online either use `sufficient` (password still works as fallback) or only cover one PAM service. This guide covers every path an attacker could use to escalate privileges, and explains exactly why each decision was made.
+
+---
 
 ## What This Guide Solves
 
-After spending hours debugging why my YubiKey worked for lock screen but not `sudo`, I found four issues that zero existing documentation covers:
+After debugging why FIDO2 worked inconsistently, three issues emerged that no existing documentation covers:
 
-1. **`u2f_keys` file format**: `pam_u2f` only reads the **first matching line** per user. Multiple lines = one key works, the other silently fails.
-2. **Stale FIDO2 credentials**: When `pam_u2f` returns `blob[0]=0x2e`, the YubiKey has old credentials you can't see — `ykman fido credentials list` reveals them.
-3. **Key 2 OTP disabled**: The second key on a YubiKey 5C NFC FIPS may have OTP disabled by default. Don't fight it — use FIDO2 for everything.
-4. **`sufficient` is a security hole**: Using `auth sufficient pam_u2f.so` (what every guide shows) lets an attacker wait out the touch timeout and fall through to password auth. Use `required` instead. This also fixes the lock screen freezing after timeout — the stuck UI is caused by cosmic-greeter receiving an unexpected password conversation after FIDO2 fails.
+1. **`u2f_keys` single-line bug**: `pam_u2f` only reads the **first matching line** per user. Two lines = second key silently fails. Both keys must be on one line.
+2. **`sufficient` vs `required` on cosmic-greeter**: Using `sufficient` causes cosmic-greeter to **freeze** after the FIDO2 timeout because it receives an unexpected `pam_unix` password conversation it can't handle. The correct flag is `required`.
+3. **Stale FIDO2 credentials**: `blob[0]=0x2e` means the key has old `pam://hostname` entries. `ykman fido credentials list` reveals them.
+
+---
 
 ## Prerequisites
 
-- YubiKey 5C NFC FIPS (or any FIDO2-capable YubiKey)
-- Pop!_OS / Ubuntu / Debian
+- Any FIDO2-capable security key (YubiKey or equivalent)
+- Pop!_OS 24.04 / Ubuntu 24.04 / Debian-based
 - `sudo` access
+- A second terminal or TTY open before making PAM changes — **never edit PAM without a fallback session open**
+
+---
 
 ## Install Dependencies
 
 ```bash
 sudo apt update
-sudo apt install libpam-u2f pam-yubico yubikey-manager
+sudo apt install libpam-u2f yubikey-manager
 ```
 
-## Lock Screen: FIDO2 (`pam_u2f.so`)
+---
 
-### 1. Register Credentials
+## Step 1: Register FIDO2 Credentials
 
-Generate credentials for each key. `-n` = no PIN verification (touch-only, required for lock screen since the greeter can't prompt for PIN).
+Generate credentials for each key. `-n` disables PIN verification (touch-only — required for lock screen since the greeter cannot prompt for a PIN).
 
 ```bash
-# Key 1
+# Key 1 — touch when LED blinks, copy the full output line
 pamu2fcfg -n
-# Hit Enter, touch key when LED blinks, copy output
 
-# Key 2
+# Key 2 — repeat
 pamu2fcfg -n
-# Hit Enter, touch key, copy output
 ```
 
-### 2. Create `u2f_keys` (CRITICAL: Single Line!)
-
-Both credentials must be on **one line per user**. This is the bug zero guides mention.
+### Create `u2f_keys` — CRITICAL: Both Keys on One Line
 
 ```bash
 mkdir -p ~/.config/Yubico
 
-# Write as ONE LINE
-# Format: username:KeyHandle1,PublicKey1,es256,+presence:KeyHandle2,PublicKey2,es256,+presence
-cat > ~/.config/Yubico/u2f_keys << 'EOF'
-<username>:<KEY1_HANDLE>,<KEY1_PUBKEY>,es256,+presence:<KEY2_HANDLE>,<KEY2_PUBKEY>,es256,+presence
-EOF
+# Format: username:Key1Handle,Key1PubKey,es256,+presence:Key2Handle,Key2PubKey,es256,+presence
+# Both keys separated by : on a SINGLE LINE
+nano ~/.config/Yubico/u2f_keys
 
-# Lock permissions — 0664 triggers warnings and can fail
 chmod 600 ~/.config/Yubico/u2f_keys
 ```
 
-**Wrong** (what most guides show):
+**Wrong** (what most guides show — Key 2 will silently fail):
 ```
-<username>:<KEY1_HANDLE>,<KEY1_PUBKEY>,es256,+presence
-<username>:<KEY2_HANDLE>,<KEY2_PUBKEY>,es256,+presence
+yourusername:<KEY1_DATA>,es256,+presence
+yourusername:<KEY2_DATA>,es256,+presence
 ```
-`pam_u2f` reads line 1, matches user `<username>`, stops. Key 2 never checked.
 
-### 3. Update PAM for Lock Screen
+**Correct** (single line, colon-separated):
+```
+yourusername:<KEY1_DATA>,es256,+presence:<KEY2_DATA>,es256,+presence
+```
 
-**Do not use `sufficient`** — it creates a password fallback that defeats the purpose of the key. Use `required` and remove `@include common-auth` from the auth stack entirely.
+`pam_u2f` reads line 1, finds a match for the username, and stops. It never reaches line 2.
+
+---
+
+## Step 2: Lock Screen (cosmic-greeter)
+
+### Why `required`, not `sufficient`
+
+- **`sufficient`**: If FIDO2 succeeds, skip the rest. If it times out or fails, fall through to `pam_unix` (password). Sounds safe — it's not. cosmic-greeter **freezes** after the FIDO2 timeout because it receives a `pam_unix` password conversation request it has no UI to handle.
+- **`required`**: FIDO2 must succeed. Period. No fallback, no freeze.
+
+### Why remove `@include common-auth`
+
+`common-auth` includes `pam_unix` — the password module. Keeping it means password auth is still stacked below FIDO2. Removing it eliminates the password path entirely.
 
 ```bash
-# Remove any existing YubiKey config and the password fallback
-sudo sed -i '/pam_yubico\|pam_u2f\|@include common-auth/d' /etc/pam.d/cosmic-greeter
+sudo cp /etc/pam.d/cosmic-greeter /etc/pam.d/cosmic-greeter.bak
 
-# Add FIDO2 as required — touch is the only way in
-sudo sed -i '/pam_succeed_if/a auth    required        pam_u2f.so cue' /etc/pam.d/cosmic-greeter
-```
-
-The resulting auth block should look like:
-```
+sudo tee /etc/pam.d/cosmic-greeter > /dev/null << 'EOF'
+#%PAM-1.0
 auth    requisite       pam_nologin.so
-auth    required        pam_succeed_if.so user != root quiet_success
+auth    requisite       pam_succeed_if.so user != root quiet_success
 auth    required        pam_u2f.so cue
 auth    optional        pam_gnome_keyring.so
 @include common-account
+session [success=ok ignore=ignore module_unknown=ignore default=bad]        pam_selinux.so close
+session required        pam_loginuid.so
+session [success=ok ignore=ignore module_unknown=ignore default=bad]        pam_selinux.so open
+session optional        pam_keyinit.so force revoke
+session required        pam_limits.so
+session required        pam_env.so readenv=1
+session required        pam_env.so readenv=1 user_readenv=1 envfile=/etc/default/locale
+@include common-session
+session optional        pam_gnome_keyring.so auto_start
+@include common-password
+EOF
 ```
 
-### 4. Fix HID Permissions
+### Fix HID Permissions
 
-`cosmic-greeter` runs as your user — it needs access to YubiKey's HID interface.
+cosmic-greeter needs access to the key's HID interface:
 
 ```bash
-# Add to group (needs re-login)
+# Permanent (requires re-login)
 sudo usermod -aG plugdev $USER
 
-# Immediate fix (active session)
+# Immediate (current session)
 sudo setfacl -m u:$USER:rw /dev/hidraw*
 ```
 
-### 5. Test Lock Screen
+---
 
-Log out. Lock screen should show "Please touch the device." when you insert YubiKey.
+## Step 3: sudo
 
-Test **both keys**.
-
-## Sudo: FIDO2 (Recommended)
-
-If Key 2's OTP is disabled, FIDO2 is consistent and works for both lock screen + sudo.
+Same logic applies. Replace `pam_yubico` (OTP) or any `@include common-auth` with FIDO2 `required`.
 
 ```bash
-# Remove old OTP config
-sudo sed -i '/pam_yubico/d' /etc/pam.d/sudo
+sudo cp /etc/pam.d/sudo /etc/pam.d/sudo.bak
 
-# Add FIDO2 — same u2f_keys file
-sudo sed -i '/@include common-auth/i auth sufficient pam_u2f.so cue' /etc/pam.d/sudo
+sudo tee /etc/pam.d/sudo > /dev/null << 'EOF'
+#%PAM-1.0
+auth       required   pam_u2f.so cue
+@include common-account
+session    required   pam_limits.so
+session    required   pam_env.so readenv=1 user_readenv=0
+session    required   pam_env.so readenv=1 envfile=/etc/default/locale user_readenv=0
+@include common-session-noninteractive
+EOF
 ```
 
-## Sudo: OTP (If Your Key Supports It)
+---
 
-If both keys have OTP enabled and you prefer OTP:
+## Step 4: su, chsh, chfn
+
+These are often overlooked. Without hardening, an attacker with your session can `su` to root with just a password.
 
 ```bash
-# Add to top of /etc/pam.d/sudo
-auth sufficient pam_yubico.so id=<YUBICO_CLIENT_ID> key=<YUBICO_API_KEY> authfile=/etc/yubico/authorized_yubikeys
+sudo cp /etc/pam.d/su /etc/pam.d/su.bak
+sudo cp /etc/pam.d/chsh /etc/pam.d/chsh.bak
+sudo cp /etc/pam.d/chfn /etc/pam.d/chfn.bak
+
+sudo tee /etc/pam.d/su > /dev/null << 'EOF'
+#%PAM-1.0
+auth       sufficient pam_rootok.so
+auth       required   pam_u2f.so cue
+@include common-account
+session    required   pam_env.so readenv=1
+session    required   pam_env.so readenv=1 envfile=/etc/default/locale
+session    optional   pam_mail.so nopen
+session    required   pam_limits.so
+@include common-session
+EOF
+
+sudo tee /etc/pam.d/chsh > /dev/null << 'EOF'
+#%PAM-1.0
+auth       required   pam_shells.so
+auth       sufficient pam_rootok.so
+auth       required   pam_u2f.so cue
+@include common-account
+@include common-session
+EOF
+
+sudo tee /etc/pam.d/chfn > /dev/null << 'EOF'
+#%PAM-1.0
+auth       sufficient pam_rootok.so
+auth       required   pam_u2f.so cue
+@include common-account
+@include common-session
+EOF
 ```
 
-Create the authfile:
+`pam_rootok.so sufficient` means root can switch users without a challenge — intentional. All non-root users require FIDO2.
+
+---
+
+## Step 5: Emergency Recovery Path
+
+**Do not remove or modify `/etc/pam.d/login`.** This is the TTY login config — accessible via `Ctrl+Alt+F2`. It uses password auth and is your recovery path if something goes wrong. Leave it untouched.
+
+---
+
+## Step 6: Sudoers — Trim NOPASSWD
+
+Check your sudoers for overly broad NOPASSWD entries:
+
 ```bash
-sudo mkdir -p /etc/yubico
-echo "<username>:003cPUBLIC_ID_1003e" | sudo tee /etc/yubico/authorized_yubikeys
-echo "<username>:003cPUBLIC_ID_2003e" | sudo tee -a /etc/yubico/authorized_yubikeys
+sudo cat /etc/sudoers.d/*
 ```
+
+Common mistake — NOPASSWD on shell interpreters or file utilities bypasses PAM entirely:
+
+```
+# DANGEROUS — gives root shell with no auth
+yourusername ALL=(ALL) NOPASSWD: /usr/bin/bash, /bin/sh, /usr/bin/cp, /usr/bin/rm, /usr/bin/tee
+```
+
+Safe NOPASSWD subset (for automation):
+```
+yourusername ALL=(ALL) NOPASSWD: /usr/bin/apt, /usr/bin/apt-get, /usr/bin/dpkg, /usr/bin/systemctl, /bin/systemctl, /usr/bin/restic, /usr/bin/tailscale, /usr/bin/journalctl
+```
+
+---
+
+## Step 7: SSH Hardening
+
+```bash
+sudo tee /etc/ssh/sshd_config.d/hardening.conf > /dev/null << 'EOF'
+PermitRootLogin no
+PasswordAuthentication no
+PermitEmptyPasswords no
+PubkeyAuthentication yes
+KbdInteractiveAuthentication no
+ChallengeResponseAuthentication no
+AuthenticationMethods publickey
+PermitUserEnvironment no
+MaxAuthTries 3
+LoginGraceTime 20
+X11Forwarding no
+AllowAgentForwarding no
+AllowTcpForwarding no
+GatewayPorts no
+ClientAliveInterval 300
+ClientAliveCountMax 2
+AllowUsers <yourusername>
+ListenAddress <your-tailscale-ip>
+EOF
+
+# Validate config before reloading
+sudo sshd -t && sudo systemctl reload ssh
+```
+
+Setting `ListenAddress` to your Tailscale IP means SSH only accepts connections over the encrypted mesh — not on the local network or public internet.
+
+---
+
+## Step 8: Firewall
+
+```bash
+sudo ufw default deny incoming
+sudo ufw default allow outgoing
+sudo ufw allow in on tailscale0
+sudo ufw --force enable
+sudo ufw status verbose
+```
+
+All inbound traffic blocked except through the Tailscale interface.
+
+---
+
+## Step 9: Kernel Hardening (sysctl)
+
+```bash
+sudo tee /etc/sysctl.d/99-custom-hardening.conf > /dev/null << 'EOF'
+# Disable ICMP redirect acceptance (prevent route hijacking)
+net.ipv4.conf.all.accept_redirects = 0
+net.ipv4.conf.default.accept_redirects = 0
+net.ipv6.conf.all.accept_redirects = 0
+net.ipv6.conf.default.accept_redirects = 0
+
+# Do not send ICMP redirects (not a router)
+net.ipv4.conf.all.send_redirects = 0
+net.ipv4.conf.default.send_redirects = 0
+
+# Log packets with impossible source addresses
+net.ipv4.conf.all.log_martians = 1
+net.ipv4.conf.default.log_martians = 1
+EOF
+
+sudo sysctl --system
+```
+
+---
+
+## Step 10: Audit Logging
+
+```bash
+sudo apt install auditd audispd-plugins
+
+sudo tee /etc/audit/rules.d/hardening.rules > /dev/null << 'EOF'
+# Changes to audit config itself
+-w /etc/audit/ -p wa -k audit-config
+-w /etc/audit/rules.d/ -p wa -k audit-config
+
+# PAM, sudo, SSH config changes
+-w /etc/pam.d/ -p wa -k pam-config
+-w /etc/sudoers -p wa -k sudoers
+-w /etc/sudoers.d/ -p wa -k sudoers
+-w /etc/ssh/sshd_config -p wa -k ssh-config
+-w /etc/ssh/sshd_config.d/ -p wa -k ssh-config
+
+# Identity file changes
+-w /etc/passwd -p wa -k identity
+-w /etc/shadow -p wa -k identity
+-w /etc/group -p wa -k identity
+-w /etc/gshadow -p wa -k identity
+
+# Privileged command execution
+-a always,exit -F path=/usr/bin/sudo -F perm=x -F auid>=1000 -F auid!=unset -k privileged-sudo
+-a always,exit -F path=/bin/su -F perm=x -F auid>=1000 -F auid!=unset -k privileged-su
+
+# Session tracking
+-w /var/log/wtmp -p wa -k session
+-w /var/log/btmp -p wa -k session
+-w /var/run/utmp -p wa -k session
+
+# Kernel module loading
+-w /sbin/insmod -p x -k module-load
+-w /sbin/modprobe -p x -k module-load
+-w /sbin/rmmod -p x -k module-load
+
+# Lock rules until reboot — must be last
+-e 2
+EOF
+
+sudo systemctl enable --now auditd
+sudo augenrules --load
+```
+
+Add `/var/log/audit` to your backup solution so logs go off-machine nightly.
+
+---
+
+## Step 11: Automatic Security Updates
+
+```bash
+sudo apt install unattended-upgrades
+
+sudo tee /etc/apt/apt.conf.d/20auto-upgrades > /dev/null << 'EOF'
+APT::Periodic::Update-Package-Lists "1";
+APT::Periodic::Unattended-Upgrade "1";
+APT::Periodic::AutocleanInterval "7";
+EOF
+
+sudo tee /etc/apt/apt.conf.d/50unattended-upgrades > /dev/null << 'EOF'
+Unattended-Upgrade::Allowed-Origins {
+    "${distro_id}:${distro_codename}-security";
+    "${distro_id}ESMApps:${distro_codename}-apps-security";
+    "${distro_id}ESM:${distro_codename}-infra-security";
+};
+Unattended-Upgrade::DevRelease "false";
+Unattended-Upgrade::Remove-Unused-Dependencies "true";
+Unattended-Upgrade::Automatic-Reboot "false";
+EOF
+
+sudo systemctl enable --now unattended-upgrades
+```
+
+---
 
 ## Troubleshooting
 
-### "Key not found" / `blob[0]=0x2e`
+### `blob[0]=0x2e` — Key Not Found
 
-The YubiKey has stale `pam://hostname` credentials that `pam_u2f` is trying and failing on.
+The key has stale `pam://hostname` credentials from a previous setup.
 
 ```bash
-# List all FIDO2 credentials on the key
 ykman fido credentials list
-
-# Delete old pam://hostname entries
 ykman fido credentials delete <CRED_ID>
 ```
+
+Re-register the key with `pamu2fcfg -n` after clearing.
+
+### cosmic-greeter Freezes After Timeout
+
+You have `sufficient` instead of `required`. With `sufficient`, after FIDO2 times out PAM falls through to `pam_unix` which sends a password conversation request that cosmic-greeter has no UI to handle — it hangs. Fix: change to `required` and remove `@include common-auth`.
 
 ### "Permissions 0664 are too open"
 
@@ -151,122 +381,83 @@ ykman fido credentials delete <CRED_ID>
 chmod 600 ~/.config/Yubico/u2f_keys
 ```
 
-### `ykman otp info` says "not enabled"
+### Lock Screen Ignores Key
 
-Key 2 has OTP disabled. Switch to FIDO2 for `sudo` (recommended) or enable OTP via YubiKey Manager GUI.
-
-### Touch prompt times out and lock screen freezes
-
-Root cause: `auth sufficient pam_u2f.so` falls through to `pam_unix` (password) on timeout. cosmic-greeter receives an unexpected password conversation and freezes — it never asked for a password and doesn't know what to do with the prompt.
-
-Fix: use `required` and remove `@include common-auth` from the auth stack (see step 3 above). With `required`, PAM returns failure immediately on timeout, the greeter gets a clean signal, and loops back to the touch prompt.
-
-You'll see an "incorrect password" notification on timeout — that's cosmic-greeter's generic auth failure label, not an actual password attempt. The touch prompt will reappear.
-
-### Emergency recovery (no key available)
-
-The lock screen and login screen use `/etc/pam.d/cosmic-greeter`. TTY login uses a separate config and still accepts passwords.
-
-Press `Ctrl+Alt+F2` at the lock or login screen to get a TTY, then log in with your password. `Ctrl+Alt+F1` returns to the GUI.
-
-### Lock screen ignores YubiKey
-
-Check HID access:
 ```bash
 ls -la /dev/hidraw*
-getfacl /dev/hidraw*
-```
-
-If you see `plugdev` group doesn't have write access, fix:
-```bash
 sudo setfacl -m u:$USER:rw /dev/hidraw*
 ```
 
-## Files
+### Locked Out Completely
+
+Boot to TTY: `Ctrl+Alt+F2`. Log in with password (TTY uses `/etc/pam.d/login` which is untouched). Restore backups from `/etc/pam.d/*.bak`.
+
+---
+
+## File Reference
 
 | File | Purpose |
 |------|---------|
-| `~/.config/Yubico/u2f_keys` | FIDO2 credentials for `pam_u2f`. **Must be single line per user.** |
-| `/etc/pam.d/cosmic-greeter` | Lock screen PAM config |
-| `/etc/pam.d/sudo` | Sudo PAM config |
-| `/etc/yubico/authorized_yubikeys` | OTP token IDs (if using yubico PAM) |
+| `~/.config/Yubico/u2f_keys` | FIDO2 credentials — **single line per user** |
+| `/etc/pam.d/cosmic-greeter` | Lock screen auth |
+| `/etc/pam.d/sudo` | sudo auth |
+| `/etc/pam.d/su` | su auth |
+| `/etc/pam.d/chsh` | Shell change auth |
+| `/etc/pam.d/chfn` | User info change auth |
+| `/etc/pam.d/login` | TTY login — **leave untouched** (recovery path) |
+| `/etc/ssh/sshd_config.d/hardening.conf` | SSH restrictions |
+| `/etc/sysctl.d/99-custom-hardening.conf` | Kernel hardening |
+| `/etc/audit/rules.d/hardening.rules` | Audit rules |
+| `/etc/sudoers.d/<username>` | Per-user sudo rules |
+
+---
 
 ## Hardware Notes
 
-- **YubiKey 5C NFC FIPS**: Two physical keys on one device (tap = Key 1, long-tap = Key 2)
-- **Key 1**: Usually has OTP enabled by default
-- **Key 2**: Usually has OTP disabled; only FIDO2/WebAuthn available
-- **Solution**: Use FIDO2 for everything — consistent across both keys, no keyboard buffer injection issues
+- **Long-tap vs tap**: On multi-configuration YubiKeys, short tap = credential slot 1, long tap = slot 2. Both work with FIDO2.
+- **OTP disabled on slot 2**: Common on FIPS variants. Use FIDO2 for everything — it's more consistent and works across all slots.
+- **Two keys, one line**: Register both keys, put both on the same line in `u2f_keys`. Test both before closing your backup session.
 
-## Sovereign Network Architecture
+---
 
-This YubiKey setup is one layer of a broader sovereign infrastructure stack built on a fresh Pop!_OS 24.04 COSMIC install.
+## Network Architecture
 
-### Network Topology
+This PAM hardening is one layer of a full sovereign infrastructure stack.
 
 ```
                     ┌─────────────────────┐
-                    │   AdGuard DNS      │
-                    │   (Primary Hub)    │
-                    │   DNS filtering +  │
-                    │   telemetry block  │
+                    │   AdGuard DNS       │
+                    │   DNS filtering +   │
+                    │   telemetry block   │
                     └──────────┬──────────┘
                                │
               ┌────────────────┼────────────────┐
               │                │                │
     ┌─────────▼──────┐ ┌───────▼──────┐ ┌──────▼───────┐
-    │  Primary       │ │  Secondary   │ │   Phone      │
-    │  Laptop        │ │  Laptop      │ │  SSH Client  │
+    │  Primary       │ │  Secondary   │ │   Mobile     │
+    │  Machine       │ │  Machine     │ │  SSH Client  │
     │  Pop!_OS 24.04 │ │  Pop!_OS     │ │              │
-    │  COSMIC        │ │  Staging Node│ │              │
+    │  COSMIC        │ │              │ │              │
     └─────────┬──────┘ └───────┬──────┘ └──────┬───────┘
               │                │                │
               └────────────────┼────────────────┘
                                │
                     ┌──────────▼──────────┐
                     │     Tailscale       │
-                    │  Encrypted Mesh VPN  │
-                    │  All devices, always │
+                    │  Encrypted Mesh VPN │
+                    │  All devices        │
                     └─────────────────────┘
 ```
 
-### Stack Components
-
 | Layer | Tool | Purpose |
 |-------|------|---------|
-| Authentication | YubiKey 5C NFC FIPS | Hardware-enforced identity — `sudo` + lock screen |
-| VPN Mesh | Tailscale | Encrypted tunnels between all devices, any network |
-| DNS | AdGuard DNS (Primary Hub) | Network-wide ad/telemetry blocking, centralized control |
-| Remote Access | SSH Client (iOS/Android) | Full terminal access to Primary and Secondary laptops from anywhere |
-| OS | Pop!_OS 24.04 COSMIC | Both laptops, clean Linux-native environment |
-| Staging | Secondary Laptop | Verification node, bidirectional SSH with Primary |
+| Authentication | FIDO2 Security Key | Hardware-enforced identity on all privilege paths |
+| VPN Mesh | Tailscale | Encrypted tunnels, stable IPs across networks |
+| DNS | AdGuard | Network-wide filtering, centralized control |
+| Remote Access | SSH (pubkey-only, Tailscale-only) | Full terminal access from anywhere |
+| OS | Pop!_OS 24.04 COSMIC | Both machines |
 
-### Why This Matters
-
-Every component is chosen for sovereignty. No cloud dependency, no third-party data capture, no trust assumptions you didn't make yourself.
-
-- **Tailscale** gives every device a stable private IP that works across networks.
-- **AdGuard DNS** on the Primary Hub filters at the network level — before any device makes an external call.
-- **YubiKey FIDO2** means the machines at the center require physical hardware presence to authenticate.
-- **SSH Client** means the whole stack is accessible from your pocket.
-
-### Access Patterns
-
-```bash
-# From phone — into Primary Laptop
-ssh <user1>@<host1>.<tailnet>.ts.net
-
-# From phone — into Secondary Laptop
-ssh <user2>@<host2>.<tailnet>.ts.net
-
-# Primary → Secondary
-ssh <user2>@<host2>.<tailnet>.ts.net
-
-# Secondary → Primary
-ssh <user1>@<host1>.<tailnet>.ts.net
-
-# DNS filtering active on all devices via AdGuard on Primary Hub
-```
+---
 
 ## License
 
