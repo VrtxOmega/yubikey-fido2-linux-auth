@@ -18,11 +18,11 @@
 
 ## Ecosystem Canon
 
-FIDO2 Sovereign Auth is the physical identity layer of the **VERITAS & Sovereign Ecosystem (Omega Universe)**. Every privilege escalation path — lock screen, sudo, su, shell change, user info change — requires physical hardware presence. No password fallback exists anywhere in the stack. A stolen session, a leaked credential, a remote exploit: none of them are enough. The attacker must hold the physical key.
+FIDO2 Sovereign Auth is the physical identity layer of the **VERITAS & Sovereign Ecosystem (Omega Universe)**. It covers every privilege escalation path — lock screen, sudo, su, shell change, user info change — and removes the password from the authentication stack entirely rather than treating it as a fallback.
 
-This is not two-factor authentication. This is **hardware-gated access**. The password is not the second factor — it has been removed entirely.
+The goal is to make physical hardware presence a hard requirement for access, not an optional second factor. This guide documents the configuration decisions, the non-obvious bugs, and the reasoning behind each choice so the setup can be understood and reproduced cleanly.
 
-> **SYSTEM INVARIANT:** Authentication does not succeed without physical key presence. No timeout, no fallback, no exception.
+> **Design principle:** No password fallback on any privilege path. Hardware presence is the only credential.
 
 ---
 
