@@ -4,11 +4,12 @@ Configure FIDO2 security keys for passwordless sudo and lock screen on Pop!_OS (
 
 ## What This Guide Solves
 
-After spending hours debugging why my YubiKey worked for lock screen but not `sudo`, I found three issues that zero existing documentation covers:
+After spending hours debugging why my YubiKey worked for lock screen but not `sudo`, I found four issues that zero existing documentation covers:
 
 1. **`u2f_keys` file format**: `pam_u2f` only reads the **first matching line** per user. Multiple lines = one key works, the other silently fails.
 2. **Stale FIDO2 credentials**: When `pam_u2f` returns `blob[0]=0x2e`, the YubiKey has old credentials you can't see — `ykman fido credentials list` reveals them.
 3. **Key 2 OTP disabled**: The second key on a YubiKey 5C NFC FIPS may have OTP disabled by default. Don't fight it — use FIDO2 for everything.
+4. **`sufficient` is a security hole**: Using `auth sufficient pam_u2f.so` (what every guide shows) lets an attacker wait out the touch timeout and fall through to password auth. Use `required` instead. This also fixes the lock screen freezing after timeout — the stuck UI is caused by cosmic-greeter receiving an unexpected password conversation after FIDO2 fails.
 
 ## Prerequisites
 
@@ -65,12 +66,23 @@ chmod 600 ~/.config/Yubico/u2f_keys
 
 ### 3. Update PAM for Lock Screen
 
-```bash
-# Remove any existing YubiKey config
-sudo sed -i '/pam_yubico\|pam_u2f/d' /etc/pam.d/cosmic-greeter
+**Do not use `sufficient`** — it creates a password fallback that defeats the purpose of the key. Use `required` and remove `@include common-auth` from the auth stack entirely.
 
-# Add FIDO2 with touch cue
-sudo sed -i '/@include common-auth/i auth sufficient pam_u2f.so cue' /etc/pam.d/cosmic-greeter
+```bash
+# Remove any existing YubiKey config and the password fallback
+sudo sed -i '/pam_yubico\|pam_u2f\|@include common-auth/d' /etc/pam.d/cosmic-greeter
+
+# Add FIDO2 as required — touch is the only way in
+sudo sed -i '/pam_succeed_if/a auth    required        pam_u2f.so cue' /etc/pam.d/cosmic-greeter
+```
+
+The resulting auth block should look like:
+```
+auth    requisite       pam_nologin.so
+auth    required        pam_succeed_if.so user != root quiet_success
+auth    required        pam_u2f.so cue
+auth    optional        pam_gnome_keyring.so
+@include common-account
 ```
 
 ### 4. Fix HID Permissions
@@ -142,6 +154,20 @@ chmod 600 ~/.config/Yubico/u2f_keys
 ### `ykman otp info` says "not enabled"
 
 Key 2 has OTP disabled. Switch to FIDO2 for `sudo` (recommended) or enable OTP via YubiKey Manager GUI.
+
+### Touch prompt times out and lock screen freezes
+
+Root cause: `auth sufficient pam_u2f.so` falls through to `pam_unix` (password) on timeout. cosmic-greeter receives an unexpected password conversation and freezes — it never asked for a password and doesn't know what to do with the prompt.
+
+Fix: use `required` and remove `@include common-auth` from the auth stack (see step 3 above). With `required`, PAM returns failure immediately on timeout, the greeter gets a clean signal, and loops back to the touch prompt.
+
+You'll see an "incorrect password" notification on timeout — that's cosmic-greeter's generic auth failure label, not an actual password attempt. The touch prompt will reappear.
+
+### Emergency recovery (no key available)
+
+The lock screen and login screen use `/etc/pam.d/cosmic-greeter`. TTY login uses a separate config and still accepts passwords.
+
+Press `Ctrl+Alt+F2` at the lock or login screen to get a TTY, then log in with your password. `Ctrl+Alt+F1` returns to the GUI.
 
 ### Lock screen ignores YubiKey
 
