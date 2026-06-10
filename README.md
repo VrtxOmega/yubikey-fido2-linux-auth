@@ -7,7 +7,7 @@
 <div align="center">
 
 ![Status](https://img.shields.io/badge/Status-ACTIVE-success?style=flat-square&labelColor=000000&color=d4af37)
-![Version](https://img.shields.io/badge/Version-v1.0.0-blue?style=flat-square&labelColor=000000)
+![Version](https://img.shields.io/badge/Version-v1.1.0-blue?style=flat-square&labelColor=000000)
 ![Platform](https://img.shields.io/badge/Platform-Pop!__OS%2024.04-informational?style=flat-square&labelColor=000000)
 ![Auth](https://img.shields.io/badge/Auth-FIDO2%20Only-d4af37?style=flat-square&labelColor=000000)
 ![License](https://img.shields.io/badge/License-MIT-green?style=flat-square&labelColor=000000)
@@ -33,8 +33,9 @@ After debugging FIDO2 failures that no existing documentation explains, three cr
 1. **`u2f_keys` single-line bug**: `pam_u2f` only reads the **first matching line** per user. Two lines = second key silently fails. Both keys must be on one line.
 2. **`sufficient` freezes cosmic-greeter**: Using `sufficient` causes cosmic-greeter to **hang** after FIDO2 timeout — it falls through to `pam_unix` and receives a password conversation request it has no UI to handle. The fix is `required` with `@include common-auth` removed entirely.
 3. **Stale FIDO2 credentials**: `blob[0]=0x2e` means the key has old `pam://hostname` entries. `ykman fido credentials list` reveals them.
+4. **Inbound SSH `pam_u2f` on a peer laptop**: SSH to machine B runs PAM on B — your key on machine A cannot satisfy it. Use outbound client guard + inbound pubkey for mesh peers (see mesh docs).
 
-No other guide covers the cosmic-greeter freeze, the single-line bug, or hardening every PAM service end to end.
+No other guide covers the cosmic-greeter freeze, the single-line bug, two-laptop mesh SSH, or hardening every PAM service end to end.
 
 ---
 
@@ -232,6 +233,10 @@ yourusername ALL=(ALL) NOPASSWD: /usr/bin/apt, /usr/bin/apt-get, /usr/bin/dpkg, 
 
 ## Step 7: SSH Hardening
 
+> **Two-laptop mesh (2026-06):** If you SSH between your own machines over Tailscale with **one FIDO2 key per laptop**, do **not** require inbound `pam_u2f` on `sshd` — the remote machine cannot see your key when you travel. Use **outbound** local touch + **inbound** pubkey-only instead. See **[docs/MESH-SSH-TWO-LAPTOP.md](docs/MESH-SSH-TWO-LAPTOP.md)** and `scripts/mesh-*.sh`.
+
+Single-machine or Tailscale-only baseline:
+
 ```bash
 sudo tee /etc/ssh/sshd_config.d/hardening.conf > /dev/null << 'EOF'
 PermitRootLogin no
@@ -390,6 +395,18 @@ sudo setfacl -m u:$USER:rw /dev/hidraw*
 
 ---
 
+## Mesh SSH Scripts (two laptops)
+
+| Script | Purpose |
+|--------|---------|
+| `scripts/mesh-ssh-outbound-guard` | Local FIDO2 touch before `ssh` to a mesh peer |
+| `scripts/mesh-install-outbound-ssh.sh` | Install guard into `~/bin` + `.bashrc` |
+| `scripts/mesh-sshd-inbound-tailnet-pubkey.sh` | Inbound `sshd`: pubkey only; drop `pam_u2f` from sshd |
+| `scripts/mesh-ssh-yubikey-doctor.sh` | Shielded health check |
+| `docs/MESH-SSH-TWO-LAPTOP.md` | Full policy, troubleshooting, lessons learned |
+
+---
+
 ## File Reference
 
 | File | Purpose |
@@ -449,7 +466,7 @@ FIDO2 Sovereign Auth is the physical identity layer of the Omega Universe. No co
 | **Identity** | FIDO2 Security Key | Hardware-enforced presence on all privilege paths |
 | **Network** | Tailscale | Encrypted mesh, stable IPs across all networks |
 | **DNS** | AdGuard | Network-wide filtering, centralized control |
-| **Remote Access** | SSH (pubkey-only, Tailscale-only) | Full terminal access from anywhere |
+| **Remote Access** | SSH (outbound FIDO2 + inbound pubkey on mesh) | Touch key on the machine you are at; peers trust Tailscale + SSH keys |
 | **OS** | Pop!_OS 24.04 COSMIC | Sovereign baseline on all machines |
 
 ---

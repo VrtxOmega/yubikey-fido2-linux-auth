@@ -1,0 +1,55 @@
+#!/bin/bash
+# Outbound mesh SSH: touch FIDO2 key on THIS machine, then connect.
+# Install as ~/bin/mesh-ssh — see mesh-install-outbound-ssh.sh
+set -euo pipefail
+
+REAL_SSH="${MESH_SSH_BIN:-/usr/bin/ssh}"
+GUARD_SVC="${MESH_SSH_GUARD_SERVICE:-yubikey-app-guard}"
+
+# Customize via env: MESH_HOST_ALIASES='peer-a|peer-b|peer-lan'
+MESH_HOST_ALIASES="${MESH_HOST_ALIASES:-peer-laptop|peer-lan}"
+
+should_skip_guard() {
+  [[ "${MESH_SSH_NO_GUARD:-}" == "1" ]] && return 0
+  local arg
+  for arg in "$@"; do
+    [[ "$arg" == *BatchMode=yes* ]] && return 0
+  done
+  return 1
+}
+
+first_host() {
+  local arg
+  for arg in "$@"; do
+    [[ "$arg" == -* ]] && continue
+    printf '%s\n' "$arg"
+    return 0
+  done
+  return 1
+}
+
+is_mesh_target() {
+  local host="$1"
+  [[ "$host" =~ ^(${MESH_HOST_ALIASES})$ ]] && return 0
+  local resolved
+  resolved="$(ssh -G "$host" 2>/dev/null | awk '$1=="hostname"{print $2; exit}')"
+  # Tailscale CGNAT (100.x) or RFC1918 LAN
+  [[ -n "$resolved" && "$resolved" =~ ^(100\.|192\.168\.|10\.) ]]
+}
+
+if should_skip_guard "$@"; then
+  exec "$REAL_SSH" "$@"
+fi
+
+host="$(first_host "$@" || true)"
+if [[ -z "${host:-}" ]] || ! is_mesh_target "$host"; then
+  exec "$REAL_SSH" "$@"
+fi
+
+echo "Touch YubiKey on $(hostname) to SSH → ${host}" >&2
+if ! pamtester "$GUARD_SVC" "$(id -un)" authenticate; then
+  echo "Outbound SSH blocked — local FIDO2 auth failed." >&2
+  exit 1
+fi
+
+exec "$REAL_SSH" "$@"
